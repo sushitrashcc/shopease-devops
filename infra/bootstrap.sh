@@ -8,12 +8,12 @@ REPO_URL="https://github.com/sushitrashcc/shopease-devops.git"
 if [ ! -f /swapfile ]; then fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile; fi
 
 # ---- Docker Engine ----
-curl -fsSL https://get.docker.com | sh
+command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh
 usermod -aG docker ubuntu
 systemctl enable --now docker
 
 # ---- Private Docker registry (images built by Jenkins are pushed here) ----
-docker run -d --restart=always --name registry -p 5000:5000 registry:2
+docker inspect registry >/dev/null 2>&1 || docker run -d --restart=always --name registry -p 5000:5000 registry:2
 
 # ---- k3s: lightweight certified Kubernetes, configured to pull from the local registry ----
 mkdir -p /etc/rancher/k3s
@@ -23,15 +23,16 @@ mirrors:
     endpoint:
       - "http://localhost:5000"
 EOF
-curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--write-kubeconfig-mode 644 --disable traefik" sh -
+command -v k3s >/dev/null || curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--write-kubeconfig-mode 644 --disable traefik" sh -
 until kubectl get nodes 2>/dev/null | grep -q " Ready"; do sleep 5; done
 mkdir -p /home/ubuntu/.kube && cp /etc/rancher/k3s/k3s.yaml /home/ubuntu/.kube/config && chown -R ubuntu:ubuntu /home/ubuntu/.kube
 
 # ---- Jenkins (custom image with Docker CLI, kubectl, Trivy, Gitleaks, Semgrep + JCasC jobs) ----
-ADMIN_PASSWORD=$(openssl rand -hex 12)
+[ -f /home/ubuntu/jenkins-admin.pass ] && ADMIN_PASSWORD=$(cat /home/ubuntu/jenkins-admin.pass) || ADMIN_PASSWORD=$(openssl rand -hex 12)
 echo "$ADMIN_PASSWORD" > /home/ubuntu/jenkins-admin.pass && chown ubuntu:ubuntu /home/ubuntu/jenkins-admin.pass && chmod 600 /home/ubuntu/jenkins-admin.pass
 docker build -t shopease-jenkins /opt/shopease/jenkins
 docker volume create jenkins_home
+docker rm -f jenkins >/dev/null 2>&1 || true
 docker run -d --name jenkins --restart=always --network host \
   --group-add "$(getent group docker | cut -d: -f3)" \
   -v jenkins_home:/var/jenkins_home \

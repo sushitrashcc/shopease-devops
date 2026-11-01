@@ -15,7 +15,7 @@ RUN apt-get update \
 RUN curl -fsSLo /usr/local/bin/kubectl "https://dl.k8s.io/release/v1.31.4/bin/linux/amd64/kubectl" && chmod +x /usr/local/bin/kubectl
 
 # Trivy (container / filesystem / IaC scanner) - pinned version
-ARG TRIVY_VERSION=0.58.1
+ARG TRIVY_VERSION=0.72.0
 RUN curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" | tar -xz -C /usr/local/bin trivy
 
 # Gitleaks (secret scanner) - pinned version
