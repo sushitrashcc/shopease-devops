@@ -1,0 +1,118 @@
+// Practical 9 - DevSecOps pipeline for the MediCare+ healthcare API.
+// Security is a gate at every stage ("shift left"): a failed security check stops the release.
+pipeline {
+  agent any
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '15'))
+  }
+  environment {
+    REGISTRY = 'localhost:5000'
+    IMAGE    = 'localhost:5000/medicare-api'
+    NS       = 'medicare'
+    REPORTS  = 'security-reports'
+  }
+  stages {
+    stage('Checkout') {
+      steps {
+        script {
+          env.TAG = "${env.BUILD_NUMBER}-" + sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
+        }
+        sh 'mkdir -p ${REPORTS} && git log -1 --pretty="Commit %h by %an: %s"'
+      }
+    }
+    stage('Secret Scan (Gitleaks)') {
+      steps {
+        // Scans the full git history for API keys, passwords, tokens
+        sh 'gitleaks detect --source . --redact --verbose --report-format json --report-path ${REPORTS}/gitleaks.json'
+      }
+    }
+    stage('SAST (Semgrep)') {
+      steps {
+        sh 'semgrep scan --metrics=off --config .semgrep/healthcare-rules.yml --config p/javascript --error --json --output ${REPORTS}/semgrep.json healthcare/src'
+        sh 'semgrep scan --metrics=off --config .semgrep/healthcare-rules.yml --config p/javascript healthcare/src'
+      }
+    }
+    stage('SCA (Dependencies)') {
+      steps {
+        sh 'docker build --target audit -t medicare-audit:${TAG} healthcare/'
+        sh 'trivy fs --scanners vuln --severity HIGH,CRITICAL --exit-code 1 healthcare/'
+      }
+    }
+    stage('Build & Unit/Security Tests') {
+      steps {
+        sh 'docker build --target test -t medicare-test:${TAG} healthcare/'
+        sh 'docker build --target runtime -t ${IMAGE}:${TAG} healthcare/'
+      }
+    }
+    stage('Container Image Scan (Trivy)') {
+      steps {
+        sh 'trivy image --severity HIGH,CRITICAL --format table ${IMAGE}:${TAG} | tee ${REPORTS}/trivy-image.txt'
+        // Quality gate: block the release on any fixable CRITICAL vulnerability
+        sh 'trivy image --severity CRITICAL --ignore-unfixed --exit-code 1 ${IMAGE}:${TAG}'
+      }
+    }
+    stage('IaC Scan (K8s manifests)') {
+      steps {
+        sh 'trivy config --severity HIGH,CRITICAL --exit-code 1 k8s/devsecops/ | tee ${REPORTS}/trivy-iac.txt'
+      }
+    }
+    stage('Push Signed-off Image') {
+      steps {
+        sh 'docker push ${IMAGE}:${TAG}'
+      }
+    }
+    stage('Deploy (Hardened K8s)') {
+      steps {
+        sh 'kubectl apply -f k8s/devsecops/medicare.yaml'
+        // API key is generated once and stored only as a Kubernetes Secret - never in Git
+        sh '''
+          kubectl -n ${NS} get secret medicare-secrets >/dev/null 2>&1 || \
+            kubectl -n ${NS} create secret generic medicare-secrets --from-literal=API_KEY=$(openssl rand -hex 24)
+        '''
+        sh 'kubectl -n ${NS} set image deployment/medicare-api api=${IMAGE}:${TAG}'
+        sh 'kubectl -n ${NS} rollout status deployment/medicare-api --timeout=180s'
+        sh 'kubectl -n ${NS} get deploy,pods,svc,networkpolicy'
+      }
+    }
+    stage('Verify Runtime Security') {
+      steps {
+        sh '''
+          POD=$(kubectl -n ${NS} get pod -l app=medicare-api -o jsonpath='{.items[0].metadata.name}')
+          echo "== Process identity (must be non-root) =="; kubectl -n ${NS} exec $POD -- id
+          echo "== Root filesystem must be read-only =="
+          if kubectl -n ${NS} exec $POD -- touch /tmp/hacked 2>/dev/null; then echo "FAIL: filesystem writable"; exit 1; else echo "PASS: write to /tmp blocked (read-only root FS)"; fi
+          echo "== Pod Security Admission blocks a privileged pod =="
+          cat > evil-pod.yaml <<EOF
+apiVersion: v1
+kind: Pod
+metadata: { name: evil, namespace: medicare }
+spec:
+  containers: [{ name: x, image: busybox, command: ["sleep","5"], securityContext: { privileged: true } }]
+EOF
+          if kubectl apply -f evil-pod.yaml 2>psa.txt; then echo "FAIL: privileged pod admitted"; kubectl -n ${NS} delete pod evil; exit 1; else cat psa.txt; echo "PASS: privileged pod rejected by Pod Security Admission"; fi
+          echo "== API without key must return 401 =="
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:30082/api/patients); echo "HTTP $CODE"; [ "$CODE" = "401" ]
+          echo "== API with key returns masked PII =="
+          KEY=$(kubectl -n ${NS} get secret medicare-secrets -o jsonpath='{.data.API_KEY}' | base64 -d)
+          curl -sf -H "x-api-key: $KEY" http://localhost:30082/api/patients/P1001; echo
+          echo "== Security headers =="; curl -sI http://localhost:30082/health | grep -iE "x-frame|content-security|x-content-type|strict-transport"
+        '''
+      }
+    }
+    stage('DAST (OWASP ZAP Baseline)') {
+      steps {
+        sh 'docker run --rm --network host ghcr.io/zaproxy/zaproxy:stable zap-baseline.py -t http://localhost:30082 -I | tee ${REPORTS}/zap-baseline.txt'
+      }
+    }
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: 'security-reports/*', allowEmptyArchive: true
+      sh 'docker image prune -f >/dev/null || true'
+    }
+    success { echo 'All security gates passed - MediCare+ API released.' }
+    failure { echo 'A security gate failed - release BLOCKED. See the stage log and security-reports/.' }
+  }
+}

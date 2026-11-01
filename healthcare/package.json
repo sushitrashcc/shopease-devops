@@ -1,0 +1,15 @@
+{
+  "name": "medicare-records-api",
+  "version": "1.0.0",
+  "description": "MediCare+ secure patient records API (PBL-III DevSecOps)",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "author": "Luv Arora",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

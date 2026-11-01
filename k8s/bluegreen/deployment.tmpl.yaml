@@ -1,0 +1,34 @@
+# Practical 8 - template rendered by Jenkins for the idle colour.
+# __COLOR__, __IMAGE__ and __VERSION__ are substituted by the pipeline.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shopease-__COLOR__
+  namespace: shopease-bg
+  labels: { app: shopease, color: __COLOR__ }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: shopease, color: __COLOR__ }
+  template:
+    metadata:
+      labels: { app: shopease, color: __COLOR__, version: "__VERSION__" }
+    spec:
+      containers:
+        - name: web
+          image: __IMAGE__
+          env:
+            - { name: DEPLOY_COLOR, value: "__COLOR__" }
+            - { name: APP_VERSION, value: "__VERSION__" }
+          ports: [{ containerPort: 3000 }]
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 128Mi }
+          readinessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 3000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10

@@ -1,0 +1,51 @@
+# Custom SAST rules for the MediCare+ healthcare service (in addition to the p/javascript ruleset)
+rules:
+  - id: hardcoded-credential
+    languages: [javascript]
+    severity: ERROR
+    message: Hard-coded credential detected. Load secrets from environment / Kubernetes Secrets.
+    patterns:
+      - pattern-either:
+          - pattern: const $K = "..."
+          - pattern: let $K = "..."
+          - pattern: var $K = "..."
+      - metavariable-regex:
+          metavariable: $K
+          regex: (?i).*(password|passwd|secret|api_?key|token).*
+  - id: no-eval
+    languages: [javascript]
+    severity: ERROR
+    message: eval()/Function() allows code injection.
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+  - id: no-child-process
+    languages: [javascript]
+    severity: ERROR
+    message: Spawning shell commands from a web service enables command injection.
+    pattern-either:
+      - pattern: require('child_process')
+      - pattern: require("child_process")
+  - id: reflected-input-in-response
+    languages: [javascript]
+    severity: ERROR
+    message: User input reflected into an HTML response (XSS). Validate and encode output.
+    pattern-either:
+      - pattern: $RES.send(<... $REQ.query ...>)
+      - pattern: $RES.send(<... $REQ.params ...>)
+      - pattern: $RES.send(<... $REQ.body ...>)
+  - id: phi-logged-to-console
+    languages: [javascript]
+    severity: ERROR
+    message: Possible patient data (PHI) written to logs. Log identifiers only.
+    pattern-either:
+      - pattern: console.log(..., $REQ.body, ...)
+      - pattern: console.log(<... $X.aadhaar ...>)
+      - pattern: console.log(<... $X.phone ...>)
+  - id: weak-hash
+    languages: [javascript]
+    severity: WARNING
+    message: MD5/SHA1 are not acceptable for healthcare data integrity.
+    pattern-either:
+      - pattern: crypto.createHash("md5")
+      - pattern: crypto.createHash("sha1")

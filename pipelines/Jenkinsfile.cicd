@@ -1,0 +1,72 @@
+// Practical 7 - CI/CD pipeline: GitHub -> Jenkins -> Docker -> private registry -> Kubernetes (k3s)
+pipeline {
+  agent any
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '15'))
+  }
+  triggers { pollSCM('H/2 * * * *') }   // CI: every push to main is picked up automatically
+  environment {
+    REGISTRY = 'localhost:5000'
+    IMAGE    = 'localhost:5000/shopease'
+    NS       = 'shopease'
+  }
+  stages {
+    stage('Checkout') {
+      steps {
+        script {
+          env.SHORT_SHA = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
+          env.TAG = "${env.BUILD_NUMBER}-${env.SHORT_SHA}"
+        }
+        sh 'git log -1 --pretty="Commit %h by %an: %s"'
+        echo "Image tag for this build: ${env.TAG}"
+      }
+    }
+    stage('Unit Test') {
+      steps {
+        // Runs "npm test" inside the Dockerfile's test stage - same Node version as production
+        sh 'docker build --target test -t shopease-test:${TAG} app/'
+      }
+    }
+    stage('Build Docker Image') {
+      steps {
+        sh 'docker build --target runtime --build-arg APP_VERSION=${TAG} -t ${IMAGE}:${TAG} -t ${IMAGE}:latest app/'
+        sh 'docker images ${IMAGE} --format "table {{.Repository}}\\t{{.Tag}}\\t{{.Size}}"'
+      }
+    }
+    stage('Push to Registry') {
+      steps {
+        sh 'docker push ${IMAGE}:${TAG} && docker push ${IMAGE}:latest'
+        sh 'curl -s http://${REGISTRY}/v2/shopease/tags/list'
+      }
+    }
+    stage('Deploy to Kubernetes') {
+      steps {
+        sh 'kubectl apply -f k8s/cicd/shopease.yaml'
+        sh 'kubectl -n ${NS} set image deployment/shopease web=${IMAGE}:${TAG}'
+        sh 'kubectl -n ${NS} annotate deployment/shopease kubernetes.io/change-cause="Jenkins build #${BUILD_NUMBER} (${SHORT_SHA})" --overwrite'
+        sh 'kubectl -n ${NS} rollout status deployment/shopease --timeout=180s'
+        sh 'kubectl -n ${NS} get deploy,pods,svc -o wide'
+      }
+    }
+    stage('Smoke Test') {
+      steps {
+        retry(5) {
+          sleep 3
+          sh 'curl -sf http://localhost:30080/health'
+        }
+        sh 'curl -sf http://localhost:30080/version'
+        sh 'curl -sf http://localhost:30080/api/products | head -c 300; echo'
+      }
+    }
+  }
+  post {
+    success { echo "ShopEase ${env.TAG} is live at http://<EC2-PUBLIC-IP>:30080" }
+    failure {
+      echo 'Deployment failed - rolling back to the previous ReplicaSet'
+      sh 'kubectl -n ${NS} rollout undo deployment/shopease || true'
+    }
+    always { sh 'docker image prune -f >/dev/null || true' }
+  }
+}

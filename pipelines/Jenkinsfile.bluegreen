@@ -1,0 +1,110 @@
+// Practical 8 - Automated Blue-Green deployment with Jenkins, Docker and Kubernetes.
+// Two identical environments (blue & green). The new release goes to the IDLE colour, is smoke-tested
+// through a preview Service, then the live Service selector is switched in one atomic patch.
+// The previous colour keeps running, so rollback is a single selector flip (ACTION=rollback).
+pipeline {
+  agent any
+  options {
+    timestamps()
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '15'))
+  }
+  parameters {
+    string(name: 'VERSION', defaultValue: 'v1', description: 'Release version to deploy (e.g. v1, v2)')
+    choice(name: 'ACTION', choices: ['deploy', 'rollback'], description: 'deploy = release VERSION to idle colour and switch; rollback = switch traffic back')
+  }
+  environment {
+    REGISTRY = 'localhost:5000'
+    IMAGE    = 'localhost:5000/shopease-bg'
+    NS       = 'shopease-bg'
+  }
+  stages {
+    stage('Detect Live Colour') {
+      steps {
+        script {
+          // Create namespace/services only the first time - re-applying would reset the selector
+          sh 'kubectl get ns ${NS} >/dev/null 2>&1 && kubectl -n ${NS} get svc shopease-live >/dev/null 2>&1 || kubectl apply -f k8s/bluegreen/base.yaml'
+          env.LIVE = sh(returnStdout: true, script: "kubectl -n ${env.NS} get svc shopease-live -o jsonpath='{.spec.selector.color}'").trim()
+          def liveReady = sh(returnStdout: true, script: "kubectl -n ${env.NS} get deploy shopease-${env.LIVE} -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true").trim()
+          if (liveReady == '' || liveReady == '0') {
+            env.TARGET = env.LIVE        // first ever release: deploy straight into the live colour
+          } else {
+            env.TARGET = (env.LIVE == 'blue') ? 'green' : 'blue'
+          }
+          echo "LIVE colour = ${env.LIVE} (ready pods: ${liveReady ?: 0}) | TARGET colour = ${env.TARGET}"
+        }
+      }
+    }
+    stage('Build & Test') {
+      when { expression { params.ACTION == 'deploy' } }
+      steps {
+        sh 'docker build --target test -t shopease-bg-test:${VERSION} app/'
+        sh 'docker build --target runtime --build-arg APP_VERSION=${VERSION} -t ${IMAGE}:${VERSION} app/'
+        sh 'docker push ${IMAGE}:${VERSION}'
+      }
+    }
+    stage('Deploy to Idle Colour') {
+      when { expression { params.ACTION == 'deploy' } }
+      steps {
+        sh '''
+          sed -e "s|__COLOR__|${TARGET}|g" -e "s|__IMAGE__|${IMAGE}:${VERSION}|g" -e "s|__VERSION__|${VERSION}|g" \
+              k8s/bluegreen/deployment.tmpl.yaml > deploy-${TARGET}.yaml
+          kubectl apply -f deploy-${TARGET}.yaml
+          kubectl -n ${NS} rollout status deployment/shopease-${TARGET} --timeout=180s
+        '''
+      }
+    }
+    stage('Smoke Test (Preview)') {
+      when { expression { params.ACTION == 'deploy' } }
+      steps {
+        sh 'kubectl -n ${NS} patch svc shopease-preview -p "{\\"spec\\":{\\"selector\\":{\\"app\\":\\"shopease\\",\\"color\\":\\"${TARGET}\\"}}}"'
+        retry(6) {
+          sleep 3
+          sh 'curl -sf http://localhost:30091/health'
+        }
+        sh '''
+          OUT=$(curl -sf http://localhost:30091/version); echo "$OUT"
+          echo "$OUT" | grep -q "\\"version\\":\\"${VERSION}\\"" && echo "$OUT" | grep -q "\\"color\\":\\"${TARGET}\\""
+          curl -sf http://localhost:30091/api/products > /dev/null && echo "Product API OK on ${TARGET}"
+        '''
+      }
+    }
+    stage('Switch Traffic') {
+      when { expression { params.ACTION == 'deploy' } }
+      steps {
+        sh 'kubectl -n ${NS} patch svc shopease-live -p "{\\"spec\\":{\\"selector\\":{\\"app\\":\\"shopease\\",\\"color\\":\\"${TARGET}\\"}}}"'
+        echo "Production traffic switched: ${env.LIVE} -> ${env.TARGET}"
+      }
+    }
+    stage('Rollback (switch back)') {
+      when { expression { params.ACTION == 'rollback' } }
+      steps {
+        script {
+          def other = (env.LIVE == 'blue') ? 'green' : 'blue'
+          def ready = sh(returnStdout: true, script: "kubectl -n ${env.NS} get deploy shopease-${other} -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true").trim()
+          if (ready == '' || ready == '0') { error "No healthy ${other} environment to roll back to" }
+          env.TARGET = other
+        }
+        sh 'kubectl -n ${NS} patch svc shopease-live -p "{\\"spec\\":{\\"selector\\":{\\"app\\":\\"shopease\\",\\"color\\":\\"${TARGET}\\"}}}"'
+        echo "Rolled back: ${env.LIVE} -> ${env.TARGET}"
+      }
+    }
+    stage('Verify Live') {
+      steps {
+        retry(5) {
+          sleep 2
+          sh '''
+            OUT=$(curl -sf http://localhost:30081/version); echo "LIVE -> $OUT"
+            echo "$OUT" | grep -q "\\"color\\":\\"${TARGET}\\""
+          '''
+        }
+        sh 'kubectl -n ${NS} get deploy,svc -o wide --show-labels'
+      }
+    }
+  }
+  post {
+    success { echo "Blue-Green complete. Live colour is now ${env.TARGET}. Previous colour kept warm for instant rollback." }
+    failure { echo "Pipeline failed BEFORE the traffic switch - users are still on ${env.LIVE}, zero impact." }
+    always  { sh 'docker image prune -f >/dev/null || true' }
+  }
+}

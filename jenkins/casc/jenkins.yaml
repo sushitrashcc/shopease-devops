@@ -1,0 +1,52 @@
+# Jenkins Configuration-as-Code: admin user, security and the three pipeline jobs.
+jenkins:
+  systemMessage: "ShopEase DevOps Platform - PBL-III | Luv Arora (RA2311027010117), Section AM2"
+  numExecutors: 2
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          password: "${ADMIN_PASSWORD}"
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: true
+unclassified:
+  location:
+    url: "http://localhost:8080/"
+jobs:
+  - script: |
+      pipelineJob('P7-ShopEase-CICD') {
+        description('Practical 7: CI/CD pipeline - build, test and deploy the Dockerized ShopEase app to Kubernetes')
+        definition {
+          cpsScm {
+            scm { git { remote { url('${REPO_URL}') }; branch('*/main') } }
+            scriptPath('pipelines/Jenkinsfile.cicd')
+            lightweight(true)
+          }
+        }
+      }
+      pipelineJob('P8-ShopEase-BlueGreen') {
+        description('Practical 8: Automated Blue-Green deployment (zero downtime, instant rollback)')
+        parameters {
+          stringParam('VERSION', 'v1', 'Release version to deploy (e.g. v1, v2)')
+          choiceParam('ACTION', ['deploy', 'rollback'], 'deploy or rollback')
+        }
+        definition {
+          cpsScm {
+            scm { git { remote { url('${REPO_URL}') }; branch('*/main') } }
+            scriptPath('pipelines/Jenkinsfile.bluegreen')
+            lightweight(true)
+          }
+        }
+      }
+      pipelineJob('P9-MediCare-DevSecOps') {
+        description('Practical 9: DevSecOps pipeline for the MediCare+ healthcare API (Gitleaks, Semgrep, Trivy, ZAP, hardened K8s)')
+        definition {
+          cpsScm {
+            scm { git { remote { url('${REPO_URL}') }; branch('*/main') } }
+            scriptPath('pipelines/Jenkinsfile.devsecops')
+            lightweight(true)
+          }
+        }
+      }
