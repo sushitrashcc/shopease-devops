@@ -95,8 +95,13 @@ EOF
           echo "== API without key must return 401 =="
           CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:30082/api/patients); echo "HTTP $CODE"; [ "$CODE" = "401" ]
           echo "== API with key returns masked PII =="
+          # Security fix: disable shell tracing so the API key is never written to the build log
+          set +x
           KEY=$(kubectl -n ${NS} get secret medicare-secrets -o jsonpath='{.data.API_KEY}' | base64 -d)
+          echo "+ curl -sf -H 'x-api-key: ********' http://localhost:30082/api/patients/P1001"
           curl -sf -H "x-api-key: $KEY" http://localhost:30082/api/patients/P1001; echo
+          unset KEY
+          set -x
           echo "== Security headers =="; curl -sI http://localhost:30082/health | grep -iE "x-frame|content-security|x-content-type|strict-transport"
         '''
       }
