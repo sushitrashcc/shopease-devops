@@ -84,10 +84,11 @@ main{max-width:980px;margin:24px auto;padding:0 16px}.grid{display:grid;grid-tem
 .card{background:#fff;border-radius:10px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}.card h3{margin:0 0 6px;font-size:17px}
 .price{font-weight:700;font-size:18px;margin:8px 0}.cat{color:#666;font-size:13px}
 button{background:${bar};color:#fff;border:0;border-radius:6px;padding:8px 12px;cursor:pointer;font-weight:600}
+  .offer{background:#fef3c7;border:1px solid #fcd34d;color:#92400e;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-weight:600}
 footer{max-width:980px;margin:24px auto;padding:0 16px 32px;color:#555;font-size:13px}
 </style></head><body>
-<header><h1>🛒 ShopEase</h1><div>${label} <span class="pill">v${VERSION}</span> <span class="pill" id="cart">Cart: 0 items</span></div></header>
-<main><div class="grid" id="grid"></div></main>
+<header><h1>🛒 ShopEase</h1><div>${label} <span class="pill">${VERSION}</span> <span class="pill" id="cart">Cart: 0 items</span></div></header>
+<main><div class="offer">🚚 Free delivery on orders above ₹999 · Festive offers live now</div><div class="grid" id="grid"></div></main>
 <footer>Served by pod <b>${os.hostname()}</b> · version <b>${VERSION}</b> · deployed via Jenkins → Docker → Kubernetes</footer>
 <script>
 const H={'Content-Type':'application/json','x-cart-id':'web'};
