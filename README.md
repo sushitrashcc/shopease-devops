@@ -58,3 +58,11 @@ scripts/          jenkins-build helper
 ## Tools used
 Git/GitHub · Jenkins (Pipeline, JCasC, Job DSL) · Docker (multi-stage builds) · Docker Registry · Kubernetes (k3s) ·
 AWS EC2/VPC/Security Groups/IAM instance profile · Gitleaks · Semgrep · npm audit · Trivy (fs, image, IaC) · OWASP ZAP
+
+## Results
+
+| Practical | Outcome |
+|-----------|---------|
+| 7 – CI/CD | Git push → Jenkins (pollSCM) → tests → Docker image → registry → rolling update on Kubernetes, fully automatic (~45 s) |
+| 8 – Blue-Green | v1 (blue) → v2 (green) switched with **zero failed requests**; rollback to blue in ~1 s |
+| 9 – DevSecOps | All 8 security gates passed (Gitleaks, Semgrep, npm audit, Trivy fs/image/IaC, runtime checks, OWASP ZAP: 0 failures); a secret-in-log issue was found, fixed and the key rotated |
