@@ -7,7 +7,7 @@ const VERSION = process.env.APP_VERSION || 'dev';
 const COLOR = (process.env.DEPLOY_COLOR || 'none').toLowerCase();
 
 const products = [
-  { id: 1, name: 'Wireless Earbuds', price: 1999, category: 'Electronics', stock: 42 },
+  { id: 1, name: 'Wireless Earbuds', price: 2999, category: 'Electronics', stock: 42 },
   { id: 2, name: 'Smart Watch', price: 4499, category: 'Electronics', stock: 18 },
   { id: 3, name: 'Running Shoes', price: 2799, category: 'Fashion', stock: 30 },
   { id: 4, name: 'Cotton T-Shirt', price: 599, category: 'Fashion', stock: 120 },
